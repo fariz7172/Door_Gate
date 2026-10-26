@@ -1,0 +1,1 @@
+netsh advfirewall firewall add rule name="GateDaemon_7788" dir=in action=allow protocol=TCP localport=7788

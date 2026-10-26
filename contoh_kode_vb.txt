@@ -1,0 +1,102 @@
+Case "sendqrcode"
+
+
+                        Try
+
+                            Dim sn = jsonMsg.Value(Of String)("sn")
+                            Dim record = jsonMsg.Value(Of String)("record")
+
+                            Dim isSuccess As Boolean = False
+                            Dim deviceName As String = ""
+                            Dim stat As Integer = -1
+
+                            Dim cCMD As New clsCMD(sConnection)
+                            cCMD.resetCmd("SELECT stat, Name FROM devicegate WHERE sn = @sn")
+                            cCMD.addParam(sn, "@sn", MySql.Data.MySqlClient.MySqlDbType.VarChar)
+                            Dim dt As DataTable = cCMD.selectDatatable()
+                            cCMD.dispose()
+
+                            Dim apiUrl As String = ""
+                            Dim reqBodyStr As String = ""
+                            Dim respStatusCode As Integer = 0
+                            Dim respBodyStr As String = ""
+
+                            If dt IsNot Nothing AndAlso dt.Rows.Count > 0 Then
+                                If Not IsDBNull(dt.Rows(0)("stat")) Then
+                                    stat = Convert.ToInt32(dt.Rows(0)("stat"))
+                                End If
+                                If Not IsDBNull(dt.Rows(0)("Name")) Then
+                                    deviceName = dt.Rows(0)("Name").ToString()
+                                End If
+
+                                Dim bodyObj As New JObject()
+                                bodyObj("member_id") = record
+                                bodyObj("device_id") = deviceName
+
+                                If stat = 0 Then
+                                    apiUrl = "https://api.fitquarters.id/v1/check_ins"
+                                    bodyObj("checked_in_at") = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss'Z'")
+                                ElseIf stat = 1 Then
+                                    apiUrl = "https://api.fitquarters.id/v1/check_outs"
+                                    bodyObj("checked_out_at") = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss'Z'")
+                                End If
+
+                                If Not String.IsNullOrEmpty(apiUrl) Then
+                                    reqBodyStr = bodyObj.ToString(Newtonsoft.Json.Formatting.None)
+                                    Try
+                                        ServicePointManager.SecurityProtocol = DirectCast(3072, SecurityProtocolType)
+                                        Using client As New HttpClient()
+                                            client.DefaultRequestHeaders.Authorization = New AuthenticationHeaderValue("Bearer", "fqk_ccd5b0430c9fb96ad297d17a88251de1dd10267b654fb0d0c968f4da4486009b")
+                                            client.DefaultRequestHeaders.TryAddWithoutValidation("Connection", "keep-alive")
+                                            Dim content As New StringContent(reqBodyStr, Encoding.UTF8, "application/json")
+                                            Dim httpResp As HttpResponseMessage = Await client.PostAsync(apiUrl, content)
+                                            respStatusCode = CInt(httpResp.StatusCode)
+                                            respBodyStr = Await httpResp.Content.ReadAsStringAsync()
+                                            If httpResp.IsSuccessStatusCode Then
+                                                isSuccess = True
+                                            End If
+                                        End Using
+                                    Catch exHttp As Exception
+                                        respBodyStr = exHttp.Message
+                                        errLogDB(exHttp.Message, "websocketloader:newMessageReceived:sendqrcode:http")
+                                    End Try
+                                End If
+                            End If
+
+                            Dim accessVal As Integer = If(isSuccess, 1, 0)
+
+                            ' Log Request & Response ke tabel tbl_gate_apilog
+                            Try
+                                Dim cCMDLog As New clsCMD(sConnection)
+                                cCMDLog.resetCmd("INSERT INTO tbl_gate_apilog (sn, device_name, member_id, stat, api_url, request_body, response_status, response_body, access, created_at) VALUES (@sn, @deviceName, @memberId, @stat, @apiUrl, @reqBody, @respStatus, @respBody, @access, NOW())")
+                                cCMDLog.addParam(sn, "@sn", MySql.Data.MySqlClient.MySqlDbType.VarChar)
+                                cCMDLog.addParam(deviceName, "@deviceName", MySql.Data.MySqlClient.MySqlDbType.VarChar)
+                                cCMDLog.addParam(record, "@memberId", MySql.Data.MySqlClient.MySqlDbType.VarChar)
+                                cCMDLog.addParam(stat, "@stat", MySql.Data.MySqlClient.MySqlDbType.Int32)
+                                cCMDLog.addParam(apiUrl, "@apiUrl", MySql.Data.MySqlClient.MySqlDbType.VarChar)
+                                cCMDLog.addParam(reqBodyStr, "@reqBody", MySql.Data.MySqlClient.MySqlDbType.Text)
+                                cCMDLog.addParam(respStatusCode, "@respStatus", MySql.Data.MySqlClient.MySqlDbType.Int32)
+                                cCMDLog.addParam(respBodyStr, "@respBody", MySql.Data.MySqlClient.MySqlDbType.Text)
+                                cCMDLog.addParam(accessVal, "@access", MySql.Data.MySqlClient.MySqlDbType.Int32)
+                                cCMDLog.executeNonQuery()
+                                cCMDLog.dispose()
+                            Catch exLog As Exception
+                                errLogDB(exLog.Message, "websocketloader:newMessageReceived:sendqrcode:savelog")
+                            End Try
+
+                            strRespone = "{""ret"":""sendqrcode"",""result"":true"
+                            If isSuccess Then
+                                strRespone = strRespone & ",""access"":1"
+                                strRespone = strRespone & ",""message"":""SILAKAN MASUK"""
+                            Else
+                                strRespone = strRespone & ",""access"":0"
+                                strRespone = strRespone & ",""message"":""QRCODE TIDAK DIKENALI"""
+                            End If
+                            strRespone = strRespone & "}"
+                            session.Send(strRespone)
+
+
+                        Catch ex As Exception
+                            errLogDB(Err.Description, "websocketloader:newMessageReceived:sendqrcode")
+                            Err.Clear()
+                        End Try

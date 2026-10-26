@@ -1,0 +1,1 @@
+php artisan token:create 1 "Read Only" --abilities="usersprofile:read"
